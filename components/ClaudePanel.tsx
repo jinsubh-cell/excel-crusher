@@ -229,7 +229,7 @@ export default function ClaudePanel() {
             </div>
             {!originalSheets.length && (
               <p className="text-[11px] text-amber-600 bg-amber-50 px-3 py-2 rounded-xl border border-amber-100">
-                먼저 왼쪽에서 엑셀 파일을 업로드하세요
+                먼저 오른쪽에서 엑셀 파일을 업로드하세요
               </p>
             )}
             {/* 예시 칩 */}

@@ -1,8 +1,9 @@
 'use client'
 
 import { useMemo, useRef, useState, useCallback } from 'react'
-import { FileSpreadsheet, Sparkles, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react'
+import { FileSpreadsheet, Sparkles, ChevronLeft, ChevronRight, Loader2, Download, Pencil } from 'lucide-react'
 import { useExcelStore } from '@/lib/store'
+import { downloadExcel } from '@/lib/excel'
 import { SheetData } from '@/types'
 
 /** 숫자 인덱스 → 엑셀 컬럼 문자 (0→A, 1→B, 25→Z, 26→AA ...) */
@@ -116,10 +117,14 @@ function TabBar({
   tabs,
   activeTab,
   onSelect,
+  onDownload,
+  hasResult,
 }: {
-  tabs: { name: string; isResult: boolean; isStreaming?: boolean }[]
+  tabs: { name: string; isResult: boolean; isModified?: boolean; isStreaming?: boolean }[]
   activeTab: string
   onSelect: (name: string) => void
+  onDownload: () => void
+  hasResult: boolean
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [canScrollLeft, setCanScrollLeft] = useState(false)
@@ -164,16 +169,18 @@ function TabBar({
             onClick={() => onSelect(tab.name)}
             className={`flex items-center gap-1 px-3 py-1.5 text-xs rounded-t whitespace-nowrap transition-all shrink-0 border border-b-0 ${
               activeTab === tab.name
-                ? tab.isResult || tab.isStreaming
+                ? tab.isResult || tab.isModified || tab.isStreaming
                   ? 'bg-white text-green-700 border-green-200 font-semibold shadow-sm'
                   : 'bg-white text-gray-800 border-gray-200 font-semibold shadow-sm'
-                : tab.isResult || tab.isStreaming
+                : tab.isResult || tab.isModified || tab.isStreaming
                 ? 'text-green-600 border-transparent hover:bg-white/70 hover:border-green-100'
                 : 'text-gray-500 border-transparent hover:bg-white/70 hover:border-gray-200'
             }`}
           >
             {tab.isStreaming ? (
               <Loader2 size={9} className="text-green-500 shrink-0 animate-spin" />
+            ) : tab.isModified ? (
+              <Pencil size={9} className="text-amber-500 shrink-0" />
             ) : tab.isResult ? (
               <Sparkles size={9} className="text-green-500 shrink-0" />
             ) : null}
@@ -190,6 +197,20 @@ function TabBar({
       >
         <ChevronRight size={14} />
       </button>
+
+      {/* ── 다운로드 버튼 (탭바 맨 오른쪽) ── */}
+      <button
+        onClick={onDownload}
+        title="현재 미리보기 다운로드"
+        className={`shrink-0 flex items-center gap-1.5 px-3 self-stretch border-l border-gray-200 text-xs font-medium transition-colors ${
+          hasResult
+            ? 'text-green-700 bg-green-50 hover:bg-green-100'
+            : 'text-gray-500 bg-gray-50 hover:bg-gray-100 hover:text-gray-700'
+        }`}
+      >
+        <Download size={13} />
+        <span className="hidden sm:inline">저장</span>
+      </button>
     </div>
   )
 }
@@ -198,26 +219,76 @@ export default function SheetViewer() {
   const {
     originalSheets, claudeResult, streamingSheets,
     activeTab, setActiveTab, isProcessing,
+    setShowOutputDialog, fileInfo,
   } = useExcelStore()
 
   // 스트리밍 중이면 streamingSheets, 완료되면 claudeResult 시트 표시
-  const resultList = claudeResult?.resultSheets ?? (isProcessing ? streamingSheets : [])
   const isShowingStreaming = !claudeResult && isProcessing && streamingSheets.length > 0
 
   const allTabs = useMemo(() => {
-    const orig = originalSheets.map((s) => ({ ...s, isResult: false, isStreaming: false }))
-    const result = resultList.map((s) => ({
-      ...s,
-      isResult: !!claudeResult,
-      isStreaming: isShowingStreaming,
-    }))
-    return [...orig, ...result]
-  }, [originalSheets, resultList, claudeResult, isShowingStreaming])
+    // 스트리밍 중: 원본 + 스트리밍 시트 표시
+    if (isShowingStreaming) {
+      const streamingNames = new Set(streamingSheets.map(s => s.name))
+      const origFiltered = originalSheets
+        .filter(s => !streamingNames.has(s.name))
+        .map(s => ({ ...s, isResult: false, isModified: false, isStreaming: false }))
+      const streamTabs = streamingSheets.map(s => ({
+        ...s, isResult: false, isModified: false, isStreaming: true,
+      }))
+      return [...origFiltered, ...streamTabs]
+    }
+
+    // 결과가 있는 경우
+    if (claudeResult && claudeResult.resultSheets.length > 0) {
+      const origNameSet = new Set(originalSheets.map(s => s.name))
+      const resultMap = new Map(claudeResult.resultSheets.map(s => [s.name, s]))
+
+      // 방식 A: 결과 시트가 원본과 같은 이름 → 원본 탭에 수정된 데이터 표시
+      const isMethodA = claudeResult.resultSheets.some(r => origNameSet.has(r.name))
+
+      if (isMethodA) {
+        // 원본 탭 이름 유지, 데이터만 수정본으로 교체 (✏️ 아이콘으로 수정됨 표시)
+        const origTabs = originalSheets.map(s => ({
+          name: s.name,
+          data: resultMap.get(s.name)?.data ?? s.data,
+          isResult: false,
+          isModified: resultMap.has(s.name),  // 수정된 탭 표시
+          isStreaming: false,
+        }))
+        // 결과 중 원본에 없는 새 시트도 추가 (드문 경우)
+        const extraResultSheets = claudeResult.resultSheets
+          .filter(r => !origNameSet.has(r.name))
+          .map(s => ({ ...s, isResult: true, isModified: false, isStreaming: false }))
+        return [...origTabs, ...extraResultSheets]
+      } else {
+        // 방식 B: 원본 유지 + 새 결과 시트 추가 (✨ 아이콘)
+        return [
+          ...originalSheets.map(s => ({ ...s, isResult: false, isModified: false, isStreaming: false })),
+          ...claudeResult.resultSheets.map(s => ({ ...s, isResult: true, isModified: false, isStreaming: false })),
+        ]
+      }
+    }
+
+    // 기본: 원본 시트만
+    return originalSheets.map(s => ({ ...s, isResult: false, isModified: false, isStreaming: false }))
+  }, [originalSheets, claudeResult, streamingSheets, isShowingStreaming])
 
   const activeSheet = useMemo(
     () => allTabs.find((t) => t.name === activeTab),
     [allTabs, activeTab]
   )
+
+  // 다운로드 핸들러
+  const handleDownload = useCallback(() => {
+    if (claudeResult && claudeResult.resultSheets.length > 0) {
+      // 결과 있으면 다운로드 다이얼로그 열기
+      setShowOutputDialog(true)
+    } else if (originalSheets.length > 0) {
+      // 원본 파일 다운로드
+      const base = fileInfo?.name.replace(/\.(xlsx|xls|csv)$/i, '') ?? 'excel'
+      downloadExcel(originalSheets, `${base}.xlsx`)
+    }
+  }, [claudeResult, originalSheets, fileInfo, setShowOutputDialog])
 
   if (allTabs.length === 0) {
     return (
@@ -228,13 +299,22 @@ export default function SheetViewer() {
     )
   }
 
+  const hasResult = !!(claudeResult && claudeResult.resultSheets.length > 0)
+
   return (
     <div className="flex flex-col h-full">
-      {/* 탭 바 (시트 많아도 스크롤 가능) */}
+      {/* 탭 바 (시트 많아도 스크롤 가능) + 다운로드 버튼 */}
       <TabBar
-        tabs={allTabs.map((t) => ({ name: t.name, isResult: t.isResult, isStreaming: t.isStreaming }))}
+        tabs={allTabs.map((t) => ({
+          name: t.name,
+          isResult: t.isResult,
+          isModified: t.isModified,
+          isStreaming: t.isStreaming,
+        }))}
         activeTab={activeTab}
         onSelect={setActiveTab}
+        onDownload={handleDownload}
+        hasResult={hasResult}
       />
 
       {/* 시트 메타 정보 */}
@@ -247,6 +327,11 @@ export default function SheetViewer() {
           {activeSheet.isStreaming && (
             <span className="text-xs text-green-600 flex items-center gap-1 font-medium">
               <Loader2 size={9} className="animate-spin" /> 생성 중...
+            </span>
+          )}
+          {activeSheet.isModified && (
+            <span className="text-xs text-amber-600 flex items-center gap-1 font-medium">
+              <Pencil size={9} /> AI 수정 적용됨
             </span>
           )}
           {activeSheet.isResult && !activeSheet.isStreaming && (

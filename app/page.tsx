@@ -30,8 +30,13 @@ export default function Home() {
 
       {/* 메인 */}
       <main className="flex flex-1 overflow-hidden">
-        {/* ── 좌측 패널 (60%) ── */}
-        <div className="flex flex-col w-[60%] border-r border-gray-200 overflow-hidden bg-white">
+        {/* ── 좌측 패널 — Claude AI (고정 너비) ── */}
+        <div className="w-[300px] min-w-[300px] bg-white overflow-hidden border-r border-gray-200">
+          <ClaudePanel />
+        </div>
+
+        {/* ── 우측 패널 (나머지 전체) ── */}
+        <div className="flex flex-col flex-1 overflow-hidden bg-white">
           {/* 파일 업로드 */}
           <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 shrink-0">
             <ExcelUploader />
@@ -43,14 +48,9 @@ export default function Home() {
           </div>
 
           {/* 로그 패널 */}
-          <div className="h-[180px] border-t border-gray-100 bg-gray-50 overflow-hidden shrink-0">
+          <div className="h-[160px] border-t border-gray-100 bg-gray-50 overflow-hidden shrink-0">
             <LogPanel />
           </div>
-        </div>
-
-        {/* ── 우측 패널 — Claude AI (Excel 확장 스타일 고정 너비) ── */}
-        <div className="w-[340px] min-w-[340px] bg-white overflow-hidden border-l border-gray-200">
-          <ClaudePanel />
         </div>
       </main>
 
