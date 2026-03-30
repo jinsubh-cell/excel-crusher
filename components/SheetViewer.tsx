@@ -1,7 +1,10 @@
 'use client'
 
 import { useMemo, useRef, useState, useCallback } from 'react'
-import { FileSpreadsheet, Sparkles, ChevronLeft, ChevronRight, Loader2, Download, Pencil } from 'lucide-react'
+import {
+  FileSpreadsheet, Sparkles, ChevronLeft, ChevronRight,
+  Loader2, Download, Pencil, X,
+} from 'lucide-react'
 import { useExcelStore } from '@/lib/store'
 import { downloadExcel } from '@/lib/excel'
 import { SheetData } from '@/types'
@@ -42,7 +45,6 @@ function DataTable({ sheet }: { sheet: SheetData }) {
         overflow: 'auto',
         overflowX: 'auto',
         overflowY: 'auto',
-        /* 스크롤바 항상 표시 (webkit) */
         WebkitOverflowScrolling: 'touch',
       }}
     >
@@ -51,7 +53,6 @@ function DataTable({ sheet }: { sheet: SheetData }) {
         style={{
           tableLayout: 'fixed',
           minWidth: `${colCount * 100 + 50}px`,
-          /* 스크롤 컨테이너 안에서 테이블이 늘어나도록 */
           width: `${colCount * 100 + 50}px`,
         }}
       >
@@ -144,21 +145,28 @@ function DataTable({ sheet }: { sheet: SheetData }) {
   )
 }
 
-/** 탭 바 */
+/** 탭 바 — 이름 변경(더블클릭), 삭제(×) 지원 */
 function TabBar({
   tabs,
   activeTab,
   onSelect,
+  onRename,
+  onDelete,
   onDownload,
 }: {
   tabs: { name: string; isResult: boolean; isStreaming?: boolean }[]
   activeTab: string
   onSelect: (name: string) => void
+  onRename: (oldName: string, newName: string) => void
+  onDelete: (name: string) => void
   onDownload: () => void
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [canScrollLeft, setCanScrollLeft] = useState(false)
   const [canScrollRight, setCanScrollRight] = useState(false)
+  const [editingTab, setEditingTab] = useState<string | null>(null)
+  const [editingValue, setEditingValue] = useState('')
+  const editInputRef = useRef<HTMLInputElement>(null)
 
   const updateScrollState = useCallback(() => {
     const el = scrollRef.current
@@ -170,6 +178,28 @@ function TabBar({
   const scroll = (dir: 'left' | 'right') => {
     scrollRef.current?.scrollBy({ left: dir === 'left' ? -200 : 200, behavior: 'smooth' })
     setTimeout(updateScrollState, 300)
+  }
+
+  const startEdit = (e: React.MouseEvent, name: string) => {
+    e.stopPropagation()
+    setEditingTab(name)
+    setEditingValue(name)
+    setTimeout(() => {
+      editInputRef.current?.focus()
+      editInputRef.current?.select()
+    }, 0)
+  }
+
+  const commitEdit = () => {
+    if (editingTab !== null) {
+      onRename(editingTab, editingValue)
+    }
+    setEditingTab(null)
+  }
+
+  const handleEditKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') { e.preventDefault(); commitEdit() }
+    if (e.key === 'Escape') setEditingTab(null)
   }
 
   return (
@@ -191,28 +221,75 @@ function TabBar({
         style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
       >
         <style jsx>{`div::-webkit-scrollbar { display: none; }`}</style>
-        {tabs.map((tab) => (
-          <button
-            key={tab.name}
-            onClick={() => onSelect(tab.name)}
-            className={`flex items-center gap-1 px-3 py-1.5 text-xs rounded-t whitespace-nowrap transition-all shrink-0 border border-b-0 ${
-              activeTab === tab.name
-                ? tab.isResult || tab.isStreaming
-                  ? 'bg-white text-green-700 border-green-300 font-semibold shadow-sm'
-                  : 'bg-white text-gray-800 border-gray-200 font-semibold shadow-sm'
-                : tab.isResult || tab.isStreaming
-                ? 'text-green-600 border-transparent hover:bg-white/70 hover:border-green-100'
-                : 'text-gray-500 border-transparent hover:bg-white/70 hover:border-gray-200'
-            }`}
-          >
-            {tab.isStreaming ? (
-              <Loader2 size={9} className="text-green-500 shrink-0 animate-spin" />
-            ) : tab.isResult ? (
-              <Sparkles size={9} className="text-green-500 shrink-0" />
-            ) : null}
-            <span className="max-w-[120px] truncate">{tab.name}</span>
-          </button>
-        ))}
+
+        {tabs.map((tab) => {
+          const isActive = activeTab === tab.name
+          const isEditing = editingTab === tab.name
+          return (
+            <div
+              key={tab.name}
+              role="button"
+              tabIndex={0}
+              onClick={() => !isEditing && onSelect(tab.name)}
+              onDoubleClick={(e) => !tab.isStreaming && startEdit(e, tab.name)}
+              className={`group flex items-center gap-1 pl-2.5 pr-1 py-1.5 text-xs rounded-t whitespace-nowrap transition-all shrink-0 border border-b-0 cursor-pointer select-none outline-none ${
+                isActive
+                  ? tab.isResult || tab.isStreaming
+                    ? 'bg-white text-green-700 border-green-300 font-semibold shadow-sm'
+                    : 'bg-white text-gray-800 border-gray-200 font-semibold shadow-sm'
+                  : tab.isResult || tab.isStreaming
+                  ? 'text-green-600 border-transparent hover:bg-white/70 hover:border-green-100'
+                  : 'text-gray-500 border-transparent hover:bg-white/70 hover:border-gray-200'
+              }`}
+            >
+              {/* 아이콘 */}
+              {tab.isStreaming ? (
+                <Loader2 size={9} className="text-green-500 shrink-0 animate-spin" />
+              ) : tab.isResult ? (
+                <Sparkles size={9} className="text-green-500 shrink-0" />
+              ) : null}
+
+              {/* 이름 또는 인라인 편집 입력 */}
+              {isEditing ? (
+                <input
+                  ref={editInputRef}
+                  value={editingValue}
+                  onChange={(e) => setEditingValue(e.target.value)}
+                  onBlur={commitEdit}
+                  onKeyDown={handleEditKeyDown}
+                  onClick={(e) => e.stopPropagation()}
+                  className="w-20 text-xs border border-blue-400 rounded px-1 py-0 outline-none bg-blue-50 text-gray-800 font-normal"
+                  style={{ height: '18px' }}
+                />
+              ) : (
+                <span
+                  className="max-w-[100px] truncate"
+                  title={`더블클릭으로 이름 변경: ${tab.name}`}
+                >
+                  {tab.name}
+                </span>
+              )}
+
+              {/* × 삭제 버튼 — 스트리밍 중 제외 */}
+              {!tab.isStreaming && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onDelete(tab.name)
+                  }}
+                  title={`"${tab.name}" 시트 삭제`}
+                  className={`shrink-0 rounded p-0.5 transition-all ml-0.5 ${
+                    isActive
+                      ? 'opacity-60 hover:opacity-100 hover:bg-red-100 hover:text-red-500 text-gray-500'
+                      : 'opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:bg-red-100 hover:text-red-500 text-gray-400'
+                  }`}
+                >
+                  <X size={9} />
+                </button>
+              )}
+            </div>
+          )
+        })}
       </div>
 
       {/* 오른쪽 화살표 */}
@@ -241,11 +318,14 @@ export default function SheetViewer() {
   const {
     originalSheets,
     resultWorkingSheets,
+    resultTabName,
     streamingSheets,
     activeTab,
     setActiveTab,
     isProcessing,
     fileInfo,
+    renameSheet,
+    deleteSheet,
   } = useExcelStore()
 
   const isShowingStreaming = !!(isProcessing && streamingSheets.length > 0)
@@ -268,10 +348,10 @@ export default function SheetViewer() {
       ]
     }
 
-    // 결과물 시트 있음: 원본 탭 + "결과물" 탭 (원본은 절대 변경 안 됨)
+    // 결과물 시트 있음: 원본 탭 + 결과물 탭 (resultTabName으로 표시)
     if (resultWorkingSheets.length > 0) {
       const resultTab: SheetData & { isResult: boolean; isStreaming: boolean } = {
-        name: '결과물',
+        name: resultTabName,
         data: resultWorkingSheets[0].data,
         isResult: true,
         isStreaming: false,
@@ -280,7 +360,7 @@ export default function SheetViewer() {
     }
 
     return origTabs
-  }, [originalSheets, resultWorkingSheets, streamingSheets, isShowingStreaming])
+  }, [originalSheets, resultWorkingSheets, resultTabName, streamingSheets, isShowingStreaming])
 
   const activeSheet = useMemo(
     () => allTabs.find(t => t.name === activeTab),
@@ -291,7 +371,6 @@ export default function SheetViewer() {
   const handleDownload = useCallback(() => {
     const base = fileInfo?.name.replace(/\.(xlsx|xls|csv)$/i, '') ?? 'excel'
     if (resultWorkingSheets.length > 0) {
-      // 결과물 시트 다운로드 (원본 시트명 유지)
       downloadExcel(resultWorkingSheets, `${base}_결과물.xlsx`)
     } else if (originalSheets.length > 0) {
       downloadExcel(originalSheets, `${base}.xlsx`)
@@ -314,6 +393,8 @@ export default function SheetViewer() {
         tabs={allTabs.map(t => ({ name: t.name, isResult: t.isResult, isStreaming: t.isStreaming }))}
         activeTab={activeTab}
         onSelect={setActiveTab}
+        onRename={renameSheet}
+        onDelete={deleteSheet}
         onDownload={handleDownload}
       />
 
@@ -324,6 +405,7 @@ export default function SheetViewer() {
             {activeSheet.data.length.toLocaleString()}행 ×{' '}
             {(activeSheet.data[0]?.length ?? 0).toLocaleString()}열
           </span>
+          <span className="text-[10px] text-gray-300">더블클릭으로 탭 이름 변경 · × 로 삭제</span>
           {activeSheet.isStreaming && (
             <span className="text-xs text-green-600 flex items-center gap-1 font-medium">
               <Loader2 size={9} className="animate-spin" /> 생성 중...

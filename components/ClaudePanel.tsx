@@ -210,6 +210,8 @@ export default function ClaudePanel() {
   }, [command, originalSheets, resultWorkingSheets, setResultWorkingSheets, setProcessing, setClaudeResult, addLog, addStreamingSheet, clearStreamingSheets, addChat])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // IME 조합 중(한글/일본어 등 입력 중)일 때는 Enter 무시 — nativeEvent.isComposing 체크
+    if (e.nativeEvent.isComposing) return
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleExecute() }
   }
 

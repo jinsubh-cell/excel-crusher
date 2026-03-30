@@ -15,6 +15,7 @@ interface ExcelStore {
   streamingSheetsValueOnly: SheetData[]
   // "결과물" 시트: 누적 작업 상태 (원본 훼손 없이 별도 관리)
   resultWorkingSheets: SheetData[]
+  resultTabName: string  // 결과물 탭 이름 (사용자가 변경 가능)
   activeTab: string
   isProcessing: boolean
   logs: LogEntry[]
@@ -27,11 +28,12 @@ interface ExcelStore {
   clearLogs: () => void
   setProcessing: (value: boolean) => void
   setClaudeResult: (result: ClaudeResult | null) => void
-  // 결과물 시트 업데이트 + "결과물" 탭으로 자동 전환
   setResultWorkingSheets: (sheets: SheetData[]) => void
   addStreamingSheet: (sheet: SheetData, sheetValue: SheetData) => void
   clearStreamingSheets: () => void
   setShowOutputDialog: (value: boolean) => void
+  renameSheet: (oldName: string, newName: string) => void
+  deleteSheet: (name: string) => void
   reset: () => void
 }
 
@@ -44,6 +46,7 @@ export const useExcelStore = create<ExcelStore>((set) => ({
   streamingSheets: [],
   streamingSheetsValueOnly: [],
   resultWorkingSheets: [],
+  resultTabName: '결과물',
   activeTab: '',
   isProcessing: false,
   logs: [],
@@ -56,7 +59,8 @@ export const useExcelStore = create<ExcelStore>((set) => ({
     set({
       originalSheets: sheets,
       activeTab: sheets[0]?.name ?? '',
-      resultWorkingSheets: [],   // 새 파일이면 기존 결과물 초기화
+      resultWorkingSheets: [],
+      resultTabName: '결과물',
       claudeResult: null,
     }),
 
@@ -82,22 +86,22 @@ export const useExcelStore = create<ExcelStore>((set) => ({
       claudeResult: result,
       streamingSheets: [],
       streamingSheetsValueOnly: [],
-      // resultWorkingSheets가 있으면 그 탭 유지, 없으면 결과 시트로
       activeTab:
         state.resultWorkingSheets.length > 0
-          ? '결과물'
+          ? state.resultTabName
           : result?.resultSheets[0]?.name ||
             state.activeTab ||
             state.originalSheets[0]?.name ||
             '',
     })),
 
-  // 결과물 시트 업데이트: "결과물" 탭으로 자동 전환
+  // 결과물 시트 업데이트: "결과물" 탭으로 자동 전환, 탭 이름 초기화
   setResultWorkingSheets: (sheets) =>
-    set({
+    set((state) => ({
       resultWorkingSheets: sheets,
-      activeTab: sheets.length > 0 ? '결과물' : '',
-    }),
+      resultTabName: '결과물',
+      activeTab: sheets.length > 0 ? '결과물' : (state.originalSheets[0]?.name ?? ''),
+    })),
 
   addStreamingSheet: (sheet, sheetValue) =>
     set((state) => ({
@@ -110,6 +114,47 @@ export const useExcelStore = create<ExcelStore>((set) => ({
 
   setShowOutputDialog: (value) => set({ showOutputDialog: value }),
 
+  // 시트 이름 변경: 결과물 탭 또는 원본 시트
+  renameSheet: (oldName, newName) =>
+    set((state) => {
+      const trimmed = newName.trim()
+      if (!trimmed || trimmed === oldName) return {}
+      // 결과물 탭 이름 변경
+      if (oldName === state.resultTabName) {
+        return {
+          resultTabName: trimmed,
+          activeTab: state.activeTab === oldName ? trimmed : state.activeTab,
+        }
+      }
+      // 원본 시트 이름 변경
+      return {
+        originalSheets: state.originalSheets.map(s =>
+          s.name === oldName ? { ...s, name: trimmed } : s
+        ),
+        activeTab: state.activeTab === oldName ? trimmed : state.activeTab,
+      }
+    }),
+
+  // 시트 삭제: 결과물 탭 삭제 = resultWorkingSheets 초기화
+  deleteSheet: (name) =>
+    set((state) => {
+      // 결과물 탭 삭제
+      if (name === state.resultTabName) {
+        return {
+          resultWorkingSheets: [],
+          resultTabName: '결과물',
+          activeTab: state.originalSheets[0]?.name ?? '',
+        }
+      }
+      // 원본 시트 삭제
+      const newSheets = state.originalSheets.filter(s => s.name !== name)
+      const nextActive =
+        state.activeTab === name
+          ? (newSheets[0]?.name ?? (state.resultWorkingSheets.length > 0 ? state.resultTabName : ''))
+          : state.activeTab
+      return { originalSheets: newSheets, activeTab: nextActive }
+    }),
+
   reset: () =>
     set({
       fileInfo: null,
@@ -118,6 +163,7 @@ export const useExcelStore = create<ExcelStore>((set) => ({
       streamingSheets: [],
       streamingSheetsValueOnly: [],
       resultWorkingSheets: [],
+      resultTabName: '결과물',
       activeTab: '',
       isProcessing: false,
       logs: [],
