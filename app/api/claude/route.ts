@@ -202,57 +202,92 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        // 모델 순서대로 시도
+        // 대기 유틸 (초 단위 카운트다운 메시지 포함)
+        const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+        const waitWithCountdown = async (seconds: number, reason: string) => {
+          for (let i = seconds; i > 0; i--) {
+            send({ type: 'progress', message: `⏳ ${reason} — ${i}초 후 재시도...` })
+            await sleep(1000)
+          }
+        }
+
+        // 모델 순서대로 시도 (429 시 최대 3회 재시도)
+        const MAX_RETRIES = 3
+        const RETRY_DELAY_SEC = 15
+
         let streamSuccess = false
         for (const m of modelsToTry) {
           send({ type: 'progress', message: `${m} 연결 중...` })
 
-          resultSheets.length = 0
-          resultSheetsValueOnly.length = 0
-          pendingOps.length = 0
-          collectedMessages.length = 0
-          logs.length = 0
-          summary = ''
-          fullText = ''
-          let lineBuffer = ''
+          let attempt = 0
+          let modelSucceeded = false
 
-          try {
-            const messageStream = anthropic.messages.stream({
-              model: m,
-              max_tokens: 16000,
-              system: SYSTEM_PROMPT,
-              messages: [{ role: 'user', content: userMsg }],
-            })
+          while (attempt <= MAX_RETRIES) {
+            resultSheets.length = 0
+            resultSheetsValueOnly.length = 0
+            pendingOps.length = 0
+            collectedMessages.length = 0
+            logs.length = 0
+            summary = ''
+            fullText = ''
+            let lineBuffer = ''
 
-            for await (const chunk of messageStream) {
-              if (
-                chunk.type === 'content_block_delta' &&
-                chunk.delta.type === 'text_delta'
-              ) {
-                const text = chunk.delta.text
-                fullText += text
-                lineBuffer += text
+            try {
+              const messageStream = anthropic.messages.stream({
+                model: m,
+                max_tokens: 16000,
+                system: SYSTEM_PROMPT,
+                messages: [{ role: 'user', content: userMsg }],
+              })
 
-                const lines = lineBuffer.split('\n')
-                lineBuffer = lines.pop() ?? ''
-                for (const line of lines) {
-                  processLine(line)
+              for await (const chunk of messageStream) {
+                if (
+                  chunk.type === 'content_block_delta' &&
+                  chunk.delta.type === 'text_delta'
+                ) {
+                  const text = chunk.delta.text
+                  fullText += text
+                  lineBuffer += text
+
+                  const lines = lineBuffer.split('\n')
+                  lineBuffer = lines.pop() ?? ''
+                  for (const line of lines) {
+                    processLine(line)
+                  }
                 }
               }
+
+              if (lineBuffer.trim()) processLine(lineBuffer)
+
+              usedModel = m
+              modelSucceeded = true
+              break  // 성공 — while 루프 탈출
+            } catch (e) {
+              const err = e as { status?: number }
+              if (err.status === 404 || err.status === 400) {
+                // 이 모델 사용 불가 → 다음 모델로
+                send({ type: 'progress', message: `${m} 사용 불가, 다음 모델 시도...` })
+                break
+              }
+              if (err.status === 429) {
+                attempt++
+                if (attempt <= MAX_RETRIES) {
+                  send({ type: 'progress', message: `🚦 API 요청 한도 초과 (${attempt}/${MAX_RETRIES}회)` })
+                  await waitWithCountdown(RETRY_DELAY_SEC, 'API 한도 초과')
+                  continue  // 같은 모델로 재시도
+                } else {
+                  // 재시도 소진 → 다음 모델로
+                  send({ type: 'progress', message: `${m} 재시도 한도 초과, 다음 모델 시도...` })
+                  break
+                }
+              }
+              throw e  // 기타 오류는 바로 던짐
             }
+          }
 
-            if (lineBuffer.trim()) processLine(lineBuffer)
-
-            usedModel = m
+          if (modelSucceeded) {
             streamSuccess = true
-            break
-          } catch (e) {
-            const err = e as { status?: number }
-            if (err.status === 404 || err.status === 400) {
-              send({ type: 'progress', message: `${m} 사용 불가, 다음 모델 시도...` })
-              continue
-            }
-            throw e
+            break  // for 루프 탈출
           }
         }
 
@@ -358,7 +393,7 @@ export async function POST(req: NextRequest) {
         } else if (error.message?.includes('Connection') || error.code === 'ECONNREFUSED') {
           msg = '네트워크 연결 오류. 잠시 후 다시 시도해 주세요.'
         } else if (error.status === 429) {
-          msg = 'API 요청 한도 초과. 잠시 후 다시 시도해 주세요.'
+          msg = 'API 요청 한도 초과 (3회 재시도 후 실패). 1~2분 후 다시 시도해 주세요.'
         } else if (error.message) {
           msg = error.message
         }
