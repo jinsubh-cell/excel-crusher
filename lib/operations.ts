@@ -49,6 +49,17 @@ function applyOp(sheet: SheetData, op: SheetOp) {
       break
     }
 
+    /* ── 행 번호 기반 삭제 (1번~N번 레코드) ──────── */
+    case 'delete_rows_by_index': {
+      const from = op.row_from ?? 1   // 1부터 시작 (헤더 제외)
+      const to   = op.row_to   ?? from
+      sheet.data = sheet.data.filter((_, idx) => {
+        if (idx === 0) return true  // 헤더 항상 보존
+        return idx < from || idx > to
+      })
+      break
+    }
+
     /* ── 조건 일치 행 삭제 ───────────────────────── */
     case 'delete_rows_where': {
       const col = op.col ?? 0
@@ -148,6 +159,8 @@ export function describeOp(op: SheetOp): string {
   switch (op.op) {
     case 'swap_cols':
       return `${op.sheet}: ${colLabel(op.col_a)}열 ↔ ${colLabel(op.col_b)}열 교환`
+    case 'delete_rows_by_index':
+      return `${op.sheet}: ${op.row_from ?? 1}~${op.row_to ?? op.row_from ?? 1}번 행 삭제`
     case 'delete_rows_where':
       return `${op.sheet}: ${colLabel(op.col)}열에서 "${op.value}" 행 삭제`
     case 'filter_keep':

@@ -15,19 +15,23 @@ const SYSTEM_PROMPT = `당신은 엑셀 데이터 처리 전문가입니다.
 {"type":"log","message":"처리 설명 (한국어)"}
 {"type":"op","sheet":"시트명","op":"swap_cols","col_a":1,"col_b":2}
 {"type":"op","sheet":"시트명","op":"delete_rows_where","col":1,"value":"김나래","match":"exact"}
+{"type":"op","sheet":"시트명","op":"delete_rows_by_index","row_from":1,"row_to":6}
 {"type":"op","sheet":"시트명","op":"sort_rows","col":2,"order":"asc"}
 {"type":"done","summary":"완료 요약"}
 
 지원 연산 목록:
-- swap_cols:          {"op":"swap_cols","col_a":열번호,"col_b":열번호}
-- delete_rows_where:  {"op":"delete_rows_where","col":열번호,"value":"삭제값","match":"exact"|"contains"}
-- filter_keep:        {"op":"filter_keep","col":열번호,"value":"유지값","match":"exact"|"contains"}
-- sort_rows:          {"op":"sort_rows","col":열번호,"order":"asc"|"desc"}
-- rename_col:         {"op":"rename_col","col":열번호,"new_name":"새이름"}
-- delete_col:         {"op":"delete_col","col":열번호}
-- move_col:           {"op":"move_col","from_col":열번호,"to_col":열번호}
+- swap_cols:              {"op":"swap_cols","col_a":열번호,"col_b":열번호}
+- delete_rows_where:      {"op":"delete_rows_where","col":열번호,"value":"삭제값","match":"exact"|"contains"}
+- delete_rows_by_index:   {"op":"delete_rows_by_index","row_from":시작행번호,"row_to":끝행번호}
+  (헤더 제외, 1번 레코드부터 시작. 예: 1번~6번 삭제 → row_from:1,row_to:6)
+- filter_keep:            {"op":"filter_keep","col":열번호,"value":"유지값","match":"exact"|"contains"}
+- sort_rows:              {"op":"sort_rows","col":열번호,"order":"asc"|"desc"}
+- rename_col:             {"op":"rename_col","col":열번호,"new_name":"새이름"}
+- delete_col:             {"op":"delete_col","col":열번호}
+- move_col:               {"op":"move_col","from_col":열번호,"to_col":열번호}
 
 열 번호는 0부터 시작합니다: A열=0, B열=1, C열=2, D열=3 ...
+행 번호(delete_rows_by_index)는 헤더 제외 1부터 시작합니다.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ## 방식 B: 새 데이터 출력 (새 시트 생성, 요약, 통계, 피벗 등)
@@ -53,15 +57,28 @@ const SYSTEM_PROMPT = `당신은 엑셀 데이터 처리 전문가입니다.
 - 방식 A 처리 후 done 출력하면 완료 (데이터 재출력 불필요)
 `
 
+// ── 모델 목록 (우선순위 순) ──
 const MODELS = [
-  'claude-sonnet-4-5',
-  'claude-3-7-sonnet-20250219',
-  'claude-3-5-sonnet-20241022',
-  'claude-3-5-haiku-20241022',
-  'claude-haiku-4-5',
-  'claude-3-opus-20240229',
-  'claude-3-haiku-20240307',
+  'claude-sonnet-4-6',           // 현재 최신 소넷 (권장)
+  'claude-haiku-4-5-20251001',   // 현재 최신 하이쿠
+  'claude-opus-4-6',             // 현재 최신 오퍼스
+  'claude-3-7-sonnet-20250219',  // 3.7 소넷 (폴백)
+  'claude-3-5-sonnet-20241022',  // 3.5 소넷 (폴백)
+  'claude-3-5-haiku-20241022',   // 3.5 하이쿠 (폴백)
 ]
+
+// ── 모델별 max_tokens (초과 시 400 오류 방지) ──
+const MODEL_MAX_TOKENS: Record<string, number> = {
+  'claude-opus-4-6':            16000,
+  'claude-sonnet-4-6':          16000,
+  'claude-haiku-4-5-20251001':   8192,
+  'claude-3-7-sonnet-20250219': 16000,
+  'claude-3-5-sonnet-20241022':  8192,
+  'claude-3-5-haiku-20241022':   8192,
+  'claude-3-opus-20240229':      4096,
+  'claude-3-haiku-20240307':     4096,
+}
+const getMaxTokens = (model: string) => MODEL_MAX_TOKENS[model] ?? 8192
 
 export async function POST(req: NextRequest) {
   const encoder = new TextEncoder()
@@ -145,6 +162,8 @@ export async function POST(req: NextRequest) {
               col_b?: number
               from_col?: number
               to_col?: number
+              row_from?: number
+              row_to?: number
               value?: string
               match?: 'exact' | 'contains'
               order?: 'asc' | 'desc'
@@ -174,6 +193,8 @@ export async function POST(req: NextRequest) {
                 col_b: obj.col_b,
                 from_col: obj.from_col,
                 to_col: obj.to_col,
+                row_from: obj.row_from,
+                row_to: obj.row_to,
                 value: obj.value,
                 match: obj.match,
                 order: obj.order,
@@ -235,7 +256,7 @@ export async function POST(req: NextRequest) {
             try {
               const messageStream = anthropic.messages.stream({
                 model: m,
-                max_tokens: 16000,
+                max_tokens: getMaxTokens(m),
                 system: SYSTEM_PROMPT,
                 messages: [{ role: 'user', content: userMsg }],
               })
@@ -266,7 +287,9 @@ export async function POST(req: NextRequest) {
               const err = e as { status?: number }
               if (err.status === 404 || err.status === 400) {
                 // 이 모델 사용 불가 → 다음 모델로
-                send({ type: 'progress', message: `${m} 사용 불가, 다음 모델 시도...` })
+                const errMsg = (err as { error?: { message?: string } }).error?.message ?? ''
+                const detail = errMsg ? ` (${errMsg.slice(0, 80)})` : ` (HTTP ${err.status})`
+                send({ type: 'progress', message: `${m} 사용 불가${detail}, 다음 모델 시도...` })
                 break
               }
               if (err.status === 429) {
