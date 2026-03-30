@@ -6,7 +6,7 @@ import { useExcelStore } from '@/lib/store'
 import { downloadExcel } from '@/lib/excel'
 import { SheetData } from '@/types'
 
-/** 숫자 인덱스 → 엑셀 컬럼 문자 (0→A, 1→B, 25→Z, 26→AA ...) */
+/** 숫자 인덱스 → 엑셀 컬럼 문자 */
 function colLetter(index: number): string {
   let result = ''
   let n = index + 1
@@ -18,7 +18,7 @@ function colLetter(index: number): string {
   return result
 }
 
-/** 엑셀과 동일한 그리드 테이블 */
+/** 엑셀 그리드 — 상하좌우 스크롤 + 고정 헤더/행번호 */
 function DataTable({ sheet }: { sheet: SheetData }) {
   const rows = sheet.data
   const colCount = useMemo(
@@ -35,29 +35,50 @@ function DataTable({ sheet }: { sheet: SheetData }) {
   }
 
   return (
-    <div className="overflow-auto h-full w-full">
+    /* ── 스크롤 컨테이너: 상하좌우 모두 스크롤 가능 ── */
+    <div
+      className="h-full w-full"
+      style={{
+        overflow: 'auto',
+        overflowX: 'auto',
+        overflowY: 'auto',
+        /* 스크롤바 항상 표시 (webkit) */
+        WebkitOverflowScrolling: 'touch',
+      }}
+    >
       <table
         className="text-xs border-collapse"
-        style={{ tableLayout: 'fixed', minWidth: `${colCount * 100 + 50}px` }}
+        style={{
+          tableLayout: 'fixed',
+          minWidth: `${colCount * 100 + 50}px`,
+          /* 스크롤 컨테이너 안에서 테이블이 늘어나도록 */
+          width: `${colCount * 100 + 50}px`,
+        }}
       >
-        {/* ── 컬럼 너비 설정 ── */}
         <colgroup>
-          {/* 행 번호 열 */}
           <col style={{ width: '42px', minWidth: '42px' }} />
           {Array.from({ length: colCount }).map((_, i) => (
             <col key={i} style={{ width: '100px', minWidth: '80px' }} />
           ))}
         </colgroup>
 
-        <thead className="sticky top-0 z-20">
+        {/* ── 컬럼 헤더 (상단 고정) ── */}
+        <thead style={{ position: 'sticky', top: 0, zIndex: 20 }}>
           <tr>
-            {/* 좌상단 코너 (비어 있음) */}
-            <th className="bg-gray-100 border border-gray-300 text-center select-none" />
-            {/* A, B, C ... 컬럼 레터 */}
+            <th
+              className="border border-gray-300 text-center select-none"
+              style={{
+                background: '#f1f5f9',
+                position: 'sticky',
+                left: 0,
+                zIndex: 30,
+                width: 42,
+              }}
+            />
             {Array.from({ length: colCount }).map((_, ci) => (
               <th
                 key={ci}
-                className="bg-gray-100 border border-gray-300 px-1 py-1 text-center text-gray-600 font-bold select-none tracking-wide"
+                className="border border-gray-300 px-1 py-1 text-center text-gray-600 font-bold select-none tracking-wide bg-gray-100"
               >
                 {colLetter(ci)}
               </th>
@@ -67,27 +88,38 @@ function DataTable({ sheet }: { sheet: SheetData }) {
 
         <tbody>
           {rows.slice(0, 5000).map((row, ri) => (
-            <tr key={ri} className="group hover:bg-blue-50/60 transition-colors">
-              {/* 행 번호 (1, 2, 3 ...) */}
-              <td className="bg-gray-50 border border-gray-200 text-center text-gray-500 font-bold select-none text-[11px] sticky left-0 z-10">
+            <tr key={ri} className="hover:bg-blue-50/60 transition-colors">
+              {/* 행 번호 (좌측 고정) */}
+              <td
+                className="border border-gray-200 text-center text-gray-500 font-bold select-none text-[11px]"
+                style={{
+                  background: '#f8fafc',
+                  position: 'sticky',
+                  left: 0,
+                  zIndex: 10,
+                  width: 42,
+                }}
+              >
                 {ri + 1}
               </td>
-              {/* 데이터 셀 */}
               {Array.from({ length: colCount }).map((_, ci) => {
                 const val = row[ci]
                 const isFormula = typeof val === 'string' && val.startsWith('=')
-                const isNumber = typeof val === 'number' || (!isFormula && val !== '' && val !== null && val !== undefined && !isNaN(Number(val)))
+                const isNumber =
+                  typeof val === 'number' ||
+                  (!isFormula && val !== '' && val !== null && val !== undefined && !isNaN(Number(val)))
                 const displayVal = val === null || val === undefined ? '' : String(val)
                 return (
                   <td
                     key={ci}
-                    className={`border border-gray-200 px-2 py-1 overflow-hidden text-ellipsis whitespace-nowrap max-w-[200px] ${
+                    className={`border border-gray-200 px-2 py-1 overflow-hidden text-ellipsis whitespace-nowrap ${
                       isFormula
                         ? 'text-blue-600 font-mono bg-blue-50/30'
                         : isNumber && displayVal !== ''
                         ? 'text-right text-gray-800'
                         : 'text-left text-gray-700'
                     }`}
+                    style={{ maxWidth: 200 }}
                     title={displayVal}
                   >
                     {displayVal}
@@ -112,14 +144,14 @@ function DataTable({ sheet }: { sheet: SheetData }) {
   )
 }
 
-/** 많은 탭을 좌우 스크롤로 처리하는 탭 바 */
+/** 탭 바 */
 function TabBar({
   tabs,
   activeTab,
   onSelect,
   onDownload,
 }: {
-  tabs: { name: string; isResult: boolean; isModified?: boolean; isStreaming?: boolean }[]
+  tabs: { name: string; isResult: boolean; isStreaming?: boolean }[]
   activeTab: string
   onSelect: (name: string) => void
   onDownload: () => void
@@ -136,10 +168,8 @@ function TabBar({
   }, [])
 
   const scroll = (dir: 'left' | 'right') => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollBy({ left: dir === 'left' ? -200 : 200, behavior: 'smooth' })
-      setTimeout(updateScrollState, 300)
-    }
+    scrollRef.current?.scrollBy({ left: dir === 'left' ? -200 : 200, behavior: 'smooth' })
+    setTimeout(updateScrollState, 300)
   }
 
   return (
@@ -148,7 +178,7 @@ function TabBar({
       <button
         onClick={() => scroll('left')}
         disabled={!canScrollLeft}
-        className="shrink-0 p-1.5 text-gray-400 hover:text-gray-700 disabled:opacity-20 disabled:cursor-default border-r border-gray-200 bg-gray-50 self-stretch flex items-center transition-colors"
+        className="shrink-0 p-1.5 text-gray-400 hover:text-gray-700 disabled:opacity-20 disabled:cursor-default border-r border-gray-200 bg-gray-50 self-stretch flex items-center"
       >
         <ChevronLeft size={14} />
       </button>
@@ -167,18 +197,16 @@ function TabBar({
             onClick={() => onSelect(tab.name)}
             className={`flex items-center gap-1 px-3 py-1.5 text-xs rounded-t whitespace-nowrap transition-all shrink-0 border border-b-0 ${
               activeTab === tab.name
-                ? tab.isResult || tab.isModified || tab.isStreaming
-                  ? 'bg-white text-green-700 border-green-200 font-semibold shadow-sm'
+                ? tab.isResult || tab.isStreaming
+                  ? 'bg-white text-green-700 border-green-300 font-semibold shadow-sm'
                   : 'bg-white text-gray-800 border-gray-200 font-semibold shadow-sm'
-                : tab.isResult || tab.isModified || tab.isStreaming
+                : tab.isResult || tab.isStreaming
                 ? 'text-green-600 border-transparent hover:bg-white/70 hover:border-green-100'
                 : 'text-gray-500 border-transparent hover:bg-white/70 hover:border-gray-200'
             }`}
           >
             {tab.isStreaming ? (
               <Loader2 size={9} className="text-green-500 shrink-0 animate-spin" />
-            ) : tab.isModified ? (
-              <Pencil size={9} className="text-amber-500 shrink-0" />
             ) : tab.isResult ? (
               <Sparkles size={9} className="text-green-500 shrink-0" />
             ) : null}
@@ -191,16 +219,16 @@ function TabBar({
       <button
         onClick={() => scroll('right')}
         disabled={!canScrollRight}
-        className="shrink-0 p-1.5 text-gray-400 hover:text-gray-700 disabled:opacity-20 disabled:cursor-default border-l border-gray-200 bg-gray-50 self-stretch flex items-center transition-colors"
+        className="shrink-0 p-1.5 text-gray-400 hover:text-gray-700 disabled:opacity-20 disabled:cursor-default border-l border-gray-200 bg-gray-50 self-stretch flex items-center"
       >
         <ChevronRight size={14} />
       </button>
 
-      {/* ── 저장 버튼 (탭바 맨 오른쪽) ── */}
+      {/* 저장 버튼 (맨 오른쪽) */}
       <button
         onClick={onDownload}
-        title="현재 미리보기 내용 다운로드"
-        className="shrink-0 flex items-center gap-1.5 px-3 self-stretch border-l border-gray-200 text-xs font-medium transition-colors text-gray-500 bg-gray-50 hover:bg-green-50 hover:text-green-700 hover:border-green-100"
+        title="현재 미리보기 다운로드"
+        className="shrink-0 flex items-center gap-1.5 px-3 self-stretch border-l border-gray-200 text-xs font-medium transition-colors text-gray-500 bg-gray-50 hover:bg-green-50 hover:text-green-700"
       >
         <Download size={13} />
         <span>저장</span>
@@ -211,78 +239,64 @@ function TabBar({
 
 export default function SheetViewer() {
   const {
-    originalSheets, claudeResult, streamingSheets,
-    activeTab, setActiveTab, isProcessing, fileInfo,
+    originalSheets,
+    resultWorkingSheets,
+    streamingSheets,
+    activeTab,
+    setActiveTab,
+    isProcessing,
+    fileInfo,
   } = useExcelStore()
 
-  // 스트리밍 중이면 streamingSheets, 완료되면 claudeResult 시트 표시
-  const isShowingStreaming = !claudeResult && isProcessing && streamingSheets.length > 0
+  const isShowingStreaming = !!(isProcessing && streamingSheets.length > 0)
 
+  /* ── 탭 목록 구성 ── */
   const allTabs = useMemo(() => {
-    // 스트리밍 중: 원본 + 스트리밍 시트 표시
+    const origTabs = originalSheets.map(s => ({
+      ...s,
+      isResult: false,
+      isStreaming: false,
+    }))
+
+    // 스트리밍 중: 원본 + 스트리밍 시트
     if (isShowingStreaming) {
       const streamingNames = new Set(streamingSheets.map(s => s.name))
-      const origFiltered = originalSheets
-        .filter(s => !streamingNames.has(s.name))
-        .map(s => ({ ...s, isResult: false, isModified: false, isStreaming: false }))
-      const streamTabs = streamingSheets.map(s => ({
-        ...s, isResult: false, isModified: false, isStreaming: true,
-      }))
-      return [...origFiltered, ...streamTabs]
+      const origFiltered = origTabs.filter(t => !streamingNames.has(t.name))
+      return [
+        ...origFiltered,
+        ...streamingSheets.map(s => ({ ...s, isResult: false, isStreaming: true })),
+      ]
     }
 
-    // 결과가 있는 경우
-    if (claudeResult && claudeResult.resultSheets.length > 0) {
-      const origNameSet = new Set(originalSheets.map(s => s.name))
-      const resultMap = new Map(claudeResult.resultSheets.map(s => [s.name, s]))
-
-      // 방식 A: 결과 시트가 원본과 같은 이름 → 원본 탭에 수정된 데이터 표시
-      const isMethodA = claudeResult.resultSheets.some(r => origNameSet.has(r.name))
-
-      if (isMethodA) {
-        // 원본 탭 이름 유지, 데이터만 수정본으로 교체 (✏️ 아이콘으로 수정됨 표시)
-        const origTabs = originalSheets.map(s => ({
-          name: s.name,
-          data: resultMap.get(s.name)?.data ?? s.data,
-          isResult: false,
-          isModified: resultMap.has(s.name),  // 수정된 탭 표시
-          isStreaming: false,
-        }))
-        // 결과 중 원본에 없는 새 시트도 추가 (드문 경우)
-        const extraResultSheets = claudeResult.resultSheets
-          .filter(r => !origNameSet.has(r.name))
-          .map(s => ({ ...s, isResult: true, isModified: false, isStreaming: false }))
-        return [...origTabs, ...extraResultSheets]
-      } else {
-        // 방식 B: 원본 유지 + 새 결과 시트 추가 (✨ 아이콘)
-        return [
-          ...originalSheets.map(s => ({ ...s, isResult: false, isModified: false, isStreaming: false })),
-          ...claudeResult.resultSheets.map(s => ({ ...s, isResult: true, isModified: false, isStreaming: false })),
-        ]
+    // 결과물 시트 있음: 원본 탭 + "결과물" 탭 (원본은 절대 변경 안 됨)
+    if (resultWorkingSheets.length > 0) {
+      const resultTab: SheetData & { isResult: boolean; isStreaming: boolean } = {
+        name: '결과물',
+        data: resultWorkingSheets[0].data,
+        isResult: true,
+        isStreaming: false,
       }
+      return [...origTabs, resultTab]
     }
 
-    // 기본: 원본 시트만
-    return originalSheets.map(s => ({ ...s, isResult: false, isModified: false, isStreaming: false }))
-  }, [originalSheets, claudeResult, streamingSheets, isShowingStreaming])
+    return origTabs
+  }, [originalSheets, resultWorkingSheets, streamingSheets, isShowingStreaming])
 
   const activeSheet = useMemo(
-    () => allTabs.find((t) => t.name === activeTab),
+    () => allTabs.find(t => t.name === activeTab),
     [allTabs, activeTab]
   )
 
-  // 다운로드 핸들러 — 현재 미리보기에 표시된 내용 그대로 다운로드
+  /* ── 저장 버튼: 결과물 시트 우선 다운로드 ── */
   const handleDownload = useCallback(() => {
-    if (allTabs.length === 0) return
     const base = fileInfo?.name.replace(/\.(xlsx|xls|csv)$/i, '') ?? 'excel'
-    const hasModified = allTabs.some(t => t.isModified || t.isResult)
-    const suffix = hasModified ? '_수정본' : ''
-    // allTabs에는 방식A 수정 데이터가 이미 반영되어 있음
-    downloadExcel(
-      allTabs.map(t => ({ name: t.name, data: t.data })),
-      `${base}${suffix}.xlsx`
-    )
-  }, [allTabs, fileInfo])
+    if (resultWorkingSheets.length > 0) {
+      // 결과물 시트 다운로드 (원본 시트명 유지)
+      downloadExcel(resultWorkingSheets, `${base}_결과물.xlsx`)
+    } else if (originalSheets.length > 0) {
+      downloadExcel(originalSheets, `${base}.xlsx`)
+    }
+  }, [resultWorkingSheets, originalSheets, fileInfo])
 
   if (allTabs.length === 0) {
     return (
@@ -295,14 +309,9 @@ export default function SheetViewer() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* 탭 바 (시트 많아도 스크롤 가능) + 다운로드 버튼 */}
+      {/* 탭 바 + 저장 버튼 */}
       <TabBar
-        tabs={allTabs.map((t) => ({
-          name: t.name,
-          isResult: t.isResult,
-          isModified: t.isModified,
-          isStreaming: t.isStreaming,
-        }))}
+        tabs={allTabs.map(t => ({ name: t.name, isResult: t.isResult, isStreaming: t.isStreaming }))}
         activeTab={activeTab}
         onSelect={setActiveTab}
         onDownload={handleDownload}
@@ -320,20 +329,20 @@ export default function SheetViewer() {
               <Loader2 size={9} className="animate-spin" /> 생성 중...
             </span>
           )}
-          {activeSheet.isModified && (
-            <span className="text-xs text-amber-600 flex items-center gap-1 font-medium">
-              <Pencil size={9} /> AI 수정 적용됨
-            </span>
-          )}
           {activeSheet.isResult && !activeSheet.isStreaming && (
             <span className="text-xs text-green-600 flex items-center gap-1 font-medium">
-              <Sparkles size={9} /> Claude 결과 시트
+              <Sparkles size={9} /> 결과물 시트 — 원본은 변경되지 않습니다
+            </span>
+          )}
+          {!activeSheet.isResult && !activeSheet.isStreaming && resultWorkingSheets.length > 0 && (
+            <span className="text-xs text-gray-400 flex items-center gap-1">
+              <Pencil size={9} /> 원본 시트 (보기 전용)
             </span>
           )}
         </div>
       )}
 
-      {/* 데이터 그리드 */}
+      {/* 데이터 그리드 (상하좌우 스크롤) */}
       <div className="flex-1 overflow-hidden bg-white">
         {activeSheet ? (
           <DataTable sheet={activeSheet} />

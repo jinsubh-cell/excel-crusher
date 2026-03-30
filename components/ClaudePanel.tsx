@@ -50,7 +50,8 @@ const logPrefix: Record<LogKind, string> = {
 
 export default function ClaudePanel() {
   const {
-    originalSheets, isProcessing, setProcessing,
+    originalSheets, resultWorkingSheets, setResultWorkingSheets,
+    isProcessing, setProcessing,
     setClaudeResult, addLog,
     claudeResult, fileInfo,
     addStreamingSheet, clearStreamingSheets,
@@ -76,6 +77,9 @@ export default function ClaudePanel() {
     if (!command.trim()) { addChat('log', '명령을 입력해 주세요.', 'error'); return }
     if (!originalSheets.length) { addChat('log', '엑셀 파일을 먼저 업로드해 주세요.', 'error'); return }
 
+    // 결과물 시트가 있으면 그것을 작업 기반으로, 없으면 원본 사용
+    const workingSheets = resultWorkingSheets.length > 0 ? resultWorkingSheets : originalSheets
+
     const submittedCommand = command.trim()
     addChat('user', submittedCommand)
     setCommand('')
@@ -86,12 +90,12 @@ export default function ClaudePanel() {
     addChat('log', `명령 전송: "${submittedCommand.slice(0, 50)}${submittedCommand.length > 50 ? '...' : ''}"`, 'processing')
 
     try {
-      const inputSheets = sheetsToClaudeInput(originalSheets, submittedCommand, 1000)
+      const claudeInput = sheetsToClaudeInput(workingSheets, submittedCommand, 1000)
 
       const res = await fetch('/api/claude', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: submittedCommand, sheets: inputSheets }),
+        body: JSON.stringify({ command: submittedCommand, sheets: claudeInput }),
       })
 
       if (!res.ok || !res.body) throw new Error(`서버 오류 (${res.status})`)
@@ -168,10 +172,10 @@ export default function ClaudePanel() {
 
       if (!result) throw new Error('결과를 받지 못했습니다. 다시 시도해 주세요.')
 
-      // 방식 A: 연산 명세 적용
+      // 방식 A: 연산 명세 적용 — workingSheets(결과물 or 원본) 기반으로 연산
       if (result.operations && result.operations.length > 0 && result.resultSheets.length === 0) {
-        addChat('log', `🔧 ${result.operations.length}개 연산을 원본 데이터에 적용 중...`, 'claude')
-        const applied = applyOperations(originalSheets, result.operations)
+        addChat('log', `🔧 ${result.operations.length}개 연산을 ${resultWorkingSheets.length > 0 ? '결과물' : '원본'} 데이터에 적용 중...`, 'claude')
+        const applied = applyOperations(workingSheets, result.operations)
         result.resultSheets = applied
         result.resultSheetsValueOnly = applied
         addChat('log', `연산 적용 완료 — ${applied.length}개 시트 수정`, 'success')
@@ -187,9 +191,12 @@ export default function ClaudePanel() {
       )
 
       if (!isChatOnly && result.resultSheets.length > 0) {
-        addChat('log', '오른쪽 미리보기에서 결과를 확인하세요. 탭바 오른쪽 [저장] 버튼으로 다운로드할 수 있습니다.', 'info')
+        // 결과물 시트를 별도 state로 관리 (원본 훼손 없이 누적)
+        setResultWorkingSheets(result.resultSheets)
+        addChat('log', '오른쪽 미리보기 [결과물] 탭에서 결과를 확인하세요. 탭바 오른쪽 [저장] 버튼으로 다운로드할 수 있습니다.', 'info')
       }
 
+      // claudeResult는 내부 상태 동기화용으로만 사용 (isChatOnly인 경우에도 호출)
       setClaudeResult(result)
 
     } catch (err) {
@@ -200,7 +207,7 @@ export default function ClaudePanel() {
     } finally {
       setProcessing(false)
     }
-  }, [command, originalSheets, setProcessing, setClaudeResult, addLog, addStreamingSheet, clearStreamingSheets, addChat])
+  }, [command, originalSheets, resultWorkingSheets, setResultWorkingSheets, setProcessing, setClaudeResult, addLog, addStreamingSheet, clearStreamingSheets, addChat])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleExecute() }
@@ -228,7 +235,7 @@ export default function ClaudePanel() {
         </div>
         {chatHistory.length > 0 && (
           <button
-            onClick={() => { setClaudeResult(null); setChatHistory([]); }}
+            onClick={() => { setClaudeResult(null); setResultWorkingSheets([]); setChatHistory([]); }}
             title="대화 초기화"
             className="p-1.5 text-gray-300 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
           >
