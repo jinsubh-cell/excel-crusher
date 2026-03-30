@@ -118,13 +118,11 @@ function TabBar({
   activeTab,
   onSelect,
   onDownload,
-  hasResult,
 }: {
   tabs: { name: string; isResult: boolean; isModified?: boolean; isStreaming?: boolean }[]
   activeTab: string
   onSelect: (name: string) => void
   onDownload: () => void
-  hasResult: boolean
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [canScrollLeft, setCanScrollLeft] = useState(false)
@@ -198,18 +196,14 @@ function TabBar({
         <ChevronRight size={14} />
       </button>
 
-      {/* ── 다운로드 버튼 (탭바 맨 오른쪽) ── */}
+      {/* ── 저장 버튼 (탭바 맨 오른쪽) ── */}
       <button
         onClick={onDownload}
-        title="현재 미리보기 다운로드"
-        className={`shrink-0 flex items-center gap-1.5 px-3 self-stretch border-l border-gray-200 text-xs font-medium transition-colors ${
-          hasResult
-            ? 'text-green-700 bg-green-50 hover:bg-green-100'
-            : 'text-gray-500 bg-gray-50 hover:bg-gray-100 hover:text-gray-700'
-        }`}
+        title="현재 미리보기 내용 다운로드"
+        className="shrink-0 flex items-center gap-1.5 px-3 self-stretch border-l border-gray-200 text-xs font-medium transition-colors text-gray-500 bg-gray-50 hover:bg-green-50 hover:text-green-700 hover:border-green-100"
       >
         <Download size={13} />
-        <span className="hidden sm:inline">저장</span>
+        <span>저장</span>
       </button>
     </div>
   )
@@ -218,8 +212,7 @@ function TabBar({
 export default function SheetViewer() {
   const {
     originalSheets, claudeResult, streamingSheets,
-    activeTab, setActiveTab, isProcessing,
-    setShowOutputDialog, fileInfo,
+    activeTab, setActiveTab, isProcessing, fileInfo,
   } = useExcelStore()
 
   // 스트리밍 중이면 streamingSheets, 완료되면 claudeResult 시트 표시
@@ -278,17 +271,18 @@ export default function SheetViewer() {
     [allTabs, activeTab]
   )
 
-  // 다운로드 핸들러
+  // 다운로드 핸들러 — 현재 미리보기에 표시된 내용 그대로 다운로드
   const handleDownload = useCallback(() => {
-    if (claudeResult && claudeResult.resultSheets.length > 0) {
-      // 결과 있으면 다운로드 다이얼로그 열기
-      setShowOutputDialog(true)
-    } else if (originalSheets.length > 0) {
-      // 원본 파일 다운로드
-      const base = fileInfo?.name.replace(/\.(xlsx|xls|csv)$/i, '') ?? 'excel'
-      downloadExcel(originalSheets, `${base}.xlsx`)
-    }
-  }, [claudeResult, originalSheets, fileInfo, setShowOutputDialog])
+    if (allTabs.length === 0) return
+    const base = fileInfo?.name.replace(/\.(xlsx|xls|csv)$/i, '') ?? 'excel'
+    const hasModified = allTabs.some(t => t.isModified || t.isResult)
+    const suffix = hasModified ? '_수정본' : ''
+    // allTabs에는 방식A 수정 데이터가 이미 반영되어 있음
+    downloadExcel(
+      allTabs.map(t => ({ name: t.name, data: t.data })),
+      `${base}${suffix}.xlsx`
+    )
+  }, [allTabs, fileInfo])
 
   if (allTabs.length === 0) {
     return (
@@ -298,8 +292,6 @@ export default function SheetViewer() {
       </div>
     )
   }
-
-  const hasResult = !!(claudeResult && claudeResult.resultSheets.length > 0)
 
   return (
     <div className="flex flex-col h-full">
@@ -314,7 +306,6 @@ export default function SheetViewer() {
         activeTab={activeTab}
         onSelect={setActiveTab}
         onDownload={handleDownload}
-        hasResult={hasResult}
       />
 
       {/* 시트 메타 정보 */}

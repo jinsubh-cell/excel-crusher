@@ -4,7 +4,6 @@ import { Zap } from 'lucide-react'
 import ExcelUploader from '@/components/ExcelUploader'
 import SheetViewer from '@/components/SheetViewer'
 import ClaudePanel from '@/components/ClaudePanel'
-import LogPanel from '@/components/LogPanel'
 import OutputDialog from '@/components/OutputDialog'
 import { useExcelStore } from '@/lib/store'
 
@@ -45,11 +44,6 @@ export default function Home() {
           {/* 시트 뷰어 */}
           <div className="flex-1 overflow-hidden bg-white">
             <SheetViewer />
-          </div>
-
-          {/* 로그 패널 */}
-          <div className="h-[160px] border-t border-gray-100 bg-gray-50 overflow-hidden shrink-0">
-            <LogPanel />
           </div>
         </div>
       </main>

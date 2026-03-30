@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useRef, useState, useEffect } from 'react'
-import { Sparkles, Send, RotateCcw, Download, ChevronDown } from 'lucide-react'
+import { Sparkles, Send, RotateCcw, ChevronDown, CheckCircle, AlertCircle, Loader2 } from 'lucide-react'
 import { useExcelStore } from '@/lib/store'
 import { sheetsToClaudeInput } from '@/lib/excel'
 import { applyOperations, describeOp } from '@/lib/operations'
@@ -18,19 +18,40 @@ const EXAMPLES = [
   '피벗 형태로 데이터 요약해줘',
 ]
 
+// ── 메시지 타입 ──
+type MsgRole = 'user' | 'assistant' | 'log'
+type LogKind = 'processing' | 'claude' | 'success' | 'error' | 'info'
+
 interface ChatMessage {
   id: string
-  role: 'user' | 'assistant'
+  role: MsgRole
   content: string
-  hasResult?: boolean
+  logKind?: LogKind
 }
 
 let msgIdCounter = 0
+const nextId = () => String(++msgIdCounter)
+
+// ── 로그 종류별 스타일 ──
+const logStyle: Record<LogKind, string> = {
+  processing: 'text-amber-600',
+  claude:     'text-blue-500',
+  success:    'text-green-600',
+  error:      'text-red-500',
+  info:       'text-gray-400',
+}
+const logPrefix: Record<LogKind, string> = {
+  processing: '⏳ ',
+  claude:     '',
+  success:    '✅ ',
+  error:      '⚠️ ',
+  info:       'ℹ️ ',
+}
 
 export default function ClaudePanel() {
   const {
     originalSheets, isProcessing, setProcessing,
-    setClaudeResult, addLog, setShowOutputDialog,
+    setClaudeResult, addLog,
     claudeResult, fileInfo,
     addStreamingSheet, clearStreamingSheets,
   } = useExcelStore()
@@ -41,32 +62,28 @@ export default function ClaudePanel() {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
-  // 메시지 추가 시 자동 스크롤
+  // 새 메시지 올 때 자동 스크롤
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [chatHistory, isProcessing])
 
+  // 채팅에 메시지 추가 헬퍼
+  const addChat = useCallback((role: MsgRole, content: string, logKind?: LogKind) => {
+    setChatHistory(prev => [...prev, { id: nextId(), role, content, logKind }])
+  }, [])
+
   const handleExecute = useCallback(async () => {
-    if (!command.trim()) { addLog('error', '명령을 입력해 주세요'); return }
-    if (!originalSheets.length) { addLog('error', '엑셀 파일을 먼저 업로드해 주세요'); return }
+    if (!command.trim()) { addChat('log', '명령을 입력해 주세요.', 'error'); return }
+    if (!originalSheets.length) { addChat('log', '엑셀 파일을 먼저 업로드해 주세요.', 'error'); return }
 
     const submittedCommand = command.trim()
-
-    // 사용자 메시지를 채팅에 추가
-    setChatHistory(prev => [...prev, {
-      id: String(++msgIdCounter),
-      role: 'user',
-      content: submittedCommand,
-    }])
-
+    addChat('user', submittedCommand)
     setCommand('')
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
-    }
+    if (textareaRef.current) textareaRef.current.style.height = 'auto'
 
     setProcessing(true)
     clearStreamingSheets()
-    addLog('processing', `명령 전송: "${submittedCommand.slice(0, 60)}${submittedCommand.length > 60 ? '...' : ''}"`)
+    addChat('log', `명령 전송: "${submittedCommand.slice(0, 50)}${submittedCommand.length > 50 ? '...' : ''}"`, 'processing')
 
     try {
       const inputSheets = sheetsToClaudeInput(originalSheets, submittedCommand, 1000)
@@ -109,22 +126,36 @@ export default function ClaudePanel() {
           try { parsed = JSON.parse(line.slice(6)) } catch { continue }
 
           if (parsed.type === 'progress' && parsed.message) {
-            addLog('claude', parsed.message)
+            // 재시도 카운트다운 메시지는 마지막 로그 업데이트
+            const isCountdown = parsed.message.includes('초 후 재시도')
+            if (isCountdown) {
+              // 카운트다운: 마지막 로그 메시지를 업데이트
+              setChatHistory(prev => {
+                const last = prev[prev.length - 1]
+                if (last?.role === 'log' && last.logKind === 'processing') {
+                  return [...prev.slice(0, -1), { ...last, content: parsed.message! }]
+                }
+                return [...prev, { id: nextId(), role: 'log', content: parsed.message!, logKind: 'processing' }]
+              })
+            } else {
+              addChat('log', parsed.message, 'processing')
+            }
           } else if (parsed.type === 'error' && parsed.error) {
             throw new Error(parsed.error)
           } else if (parsed.type === 'op' && parsed.op) {
             collectedOps.push(parsed.op)
+            addChat('log', `📋 ${describeOp(parsed.op)}`, 'claude')
             addLog('claude', `📋 ${describeOp(parsed.op)}`)
           } else if (parsed.type === 'sheet' && parsed.sheet && parsed.sheetValue) {
             addStreamingSheet(parsed.sheet, parsed.sheetValue)
-            addLog('claude', `📊 시트 생성: ${parsed.sheet.name} (${parsed.sheet.data.length}행)`)
+            addChat('log', `📊 시트 생성: ${parsed.sheet.name} (${parsed.sheet.data.length}행)`, 'claude')
           } else if (parsed.type === 'result' && parsed.data) {
             result = parsed.data
           }
         }
       }
 
-      // 클라이언트 폴백: result가 없어도 ops가 수집되었으면 결과 구성
+      // 클라이언트 폴백
       if (!result && collectedOps.length > 0) {
         result = {
           resultSheets: [],
@@ -139,47 +170,40 @@ export default function ClaudePanel() {
 
       // 방식 A: 연산 명세 적용
       if (result.operations && result.operations.length > 0 && result.resultSheets.length === 0) {
-        addLog('claude', `🔧 ${result.operations.length}개 연산을 원본 데이터에 적용 중...`)
+        addChat('log', `🔧 ${result.operations.length}개 연산을 원본 데이터에 적용 중...`, 'claude')
         const applied = applyOperations(originalSheets, result.operations)
         result.resultSheets = applied
         result.resultSheetsValueOnly = applied
-        addLog('success', `연산 적용 완료 — ${applied.length}개 시트 수정`)
+        addChat('log', `연산 적용 완료 — ${applied.length}개 시트 수정`, 'success')
       }
 
-      result.logs?.forEach((l) => addLog('claude', l))
-      addLog('success', `완료! 결과 시트 ${result.resultSheets.length}개 생성`)
+      result.logs?.forEach(l => addChat('log', l, 'claude'))
 
-      // AI 응답을 채팅에 추가 (isChatOnly면 다운로드 버튼 숨김)
-      const isChatOnly = result!.isChatOnly === true
-      setChatHistory(prev => [...prev, {
-        id: String(++msgIdCounter),
-        role: 'assistant',
-        content: result!.summary || `처리 완료 — 결과 시트 ${result!.resultSheets.length}개 생성됨`,
-        hasResult: !isChatOnly && (result!.resultSheets.length > 0 || (result!.operations?.length ?? 0) > 0),
-      }])
+      // 최종 AI 응답
+      const isChatOnly = result.isChatOnly === true
+      addChat(
+        'assistant',
+        result.summary || `처리 완료 — 결과 시트 ${result.resultSheets.length}개 생성됨`,
+      )
+
+      if (!isChatOnly && result.resultSheets.length > 0) {
+        addChat('log', '오른쪽 미리보기에서 결과를 확인하세요. 탭바 오른쪽 [저장] 버튼으로 다운로드할 수 있습니다.', 'info')
+      }
 
       setClaudeResult(result)
-      // ✅ 자동 다운로드 팝업 제거 — 사용자가 직접 버튼 클릭
 
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : '오류 발생'
-      addLog('error', `실패: ${errMsg}`)
-      setChatHistory(prev => [...prev, {
-        id: String(++msgIdCounter),
-        role: 'assistant',
-        content: `⚠️ ${errMsg}`,
-      }])
+      addChat('log', `실패: ${errMsg}`, 'error')
+      addChat('assistant', `⚠️ ${errMsg}`)
       clearStreamingSheets()
     } finally {
       setProcessing(false)
     }
-  }, [command, originalSheets, setProcessing, setClaudeResult, addLog, setShowOutputDialog, addStreamingSheet, clearStreamingSheets])
+  }, [command, originalSheets, setProcessing, setClaudeResult, addLog, addStreamingSheet, clearStreamingSheets, addChat])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleExecute()
-    }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleExecute() }
   }
 
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -193,28 +217,28 @@ export default function ClaudePanel() {
   return (
     <div className="flex flex-col h-full bg-white">
 
-      {/* ── 헤더 (Claude Excel 확장 스타일) ── */}
+      {/* ── 헤더 ── */}
       <div className="flex items-center gap-2.5 px-4 py-3 border-b border-gray-100 bg-white shrink-0">
         <div className="w-6 h-6 rounded-lg bg-amber-500 flex items-center justify-center">
           <Sparkles size={12} className="text-white" />
         </div>
-        <div className="flex flex-col leading-none">
+        <div className="flex flex-col leading-none flex-1">
           <span className="text-xs font-bold text-gray-900">Claude</span>
           <span className="text-[10px] text-gray-400 mt-0.5">Excel Assistant</span>
         </div>
         {chatHistory.length > 0 && (
           <button
-            onClick={() => { setClaudeResult(null); setChatHistory([]); addLog('info', '대화 초기화') }}
+            onClick={() => { setClaudeResult(null); setChatHistory([]); }}
             title="대화 초기화"
-            className="ml-auto p-1.5 text-gray-300 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+            className="p-1.5 text-gray-300 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
           >
             <RotateCcw size={12} />
           </button>
         )}
       </div>
 
-      {/* ── 채팅 히스토리 ── */}
-      <div className="flex-1 overflow-y-auto px-3 py-4 space-y-3 bg-gray-50/40">
+      {/* ── 채팅 + 로그 통합 영역 ── */}
+      <div className="flex-1 overflow-y-auto px-3 py-4 space-y-2 bg-gray-50/40">
         {chatHistory.length === 0 ? (
           /* 웰컴 화면 */
           <div className="flex flex-col items-center justify-center h-full gap-3 text-center px-3 pb-6">
@@ -232,7 +256,6 @@ export default function ClaudePanel() {
                 먼저 오른쪽에서 엑셀 파일을 업로드하세요
               </p>
             )}
-            {/* 예시 칩 */}
             {originalSheets.length > 0 && (
               <div className="flex flex-wrap gap-1.5 justify-center mt-1">
                 {EXAMPLES.slice(0, 4).map((ex, i) => (
@@ -248,44 +271,46 @@ export default function ClaudePanel() {
             )}
           </div>
         ) : (
-          chatHistory.map((msg) => (
-            <div key={msg.id} className={`flex items-end gap-1.5 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              {/* AI 아바타 */}
-              {msg.role === 'assistant' && (
-                <div className="w-5 h-5 rounded-full bg-amber-500 flex items-center justify-center shrink-0 mb-0.5">
-                  <Sparkles size={9} className="text-white" />
+          chatHistory.map((msg) => {
+            /* ── 로그 메시지 ── */
+            if (msg.role === 'log') {
+              const kind = msg.logKind ?? 'info'
+              return (
+                <div key={msg.id} className={`flex items-start gap-1.5 px-1 ${logStyle[kind]}`}>
+                  <span className="text-[10px] leading-relaxed opacity-80">
+                    {logPrefix[kind]}{msg.content}
+                  </span>
                 </div>
-              )}
+              )
+            }
 
-              <div className={`max-w-[85%] ${msg.role === 'user' ? 'items-end' : 'items-start'} flex flex-col gap-1`}>
-                <div className={`rounded-2xl px-3 py-2 text-[12px] leading-relaxed ${
+            /* ── 사용자 / AI 메시지 ── */
+            return (
+              <div key={msg.id}
+                className={`flex items-end gap-1.5 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+              >
+                {msg.role === 'assistant' && (
+                  <div className="w-5 h-5 rounded-full bg-amber-500 flex items-center justify-center shrink-0 mb-0.5">
+                    <Sparkles size={9} className="text-white" />
+                  </div>
+                )}
+                <div className={`max-w-[85%] rounded-2xl px-3 py-2 text-[12px] leading-relaxed ${
                   msg.role === 'user'
                     ? 'bg-blue-500 text-white rounded-br-sm'
                     : 'bg-white border border-gray-200 text-gray-800 rounded-bl-sm shadow-sm'
                 }`}>
                   {msg.content}
                 </div>
-
-                {/* 결과 있을 때 다운로드 버튼 */}
-                {msg.hasResult && claudeResult && (
-                  <button
-                    onClick={() => setShowOutputDialog(true)}
-                    className="flex items-center gap-1.5 text-[11px] text-green-700 bg-green-50 hover:bg-green-100 border border-green-200 rounded-xl px-3 py-1.5 font-medium transition-colors shadow-sm"
-                  >
-                    <Download size={11} />
-                    엑셀 다운로드 (.xlsx)
-                  </button>
-                )}
               </div>
-            </div>
-          ))
+            )
+          })
         )}
 
         {/* 타이핑 인디케이터 */}
         {isProcessing && (
           <div className="flex items-end gap-1.5 justify-start">
             <div className="w-5 h-5 rounded-full bg-amber-500 flex items-center justify-center shrink-0">
-              <Sparkles size={9} className="text-white animate-pulse" />
+              <Loader2 size={9} className="text-white animate-spin" />
             </div>
             <div className="bg-white border border-gray-200 rounded-2xl rounded-bl-sm px-3 py-2.5 shadow-sm">
               <div className="flex gap-1 items-center">
@@ -306,11 +331,7 @@ export default function ClaudePanel() {
             {EXAMPLES.map((ex, i) => (
               <button
                 key={i}
-                onClick={() => {
-                  setCommand(ex)
-                  setShowExamples(false)
-                  textareaRef.current?.focus()
-                }}
+                onClick={() => { setCommand(ex); setShowExamples(false); textareaRef.current?.focus() }}
                 className="text-left text-[11px] px-2.5 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-gray-500 hover:text-gray-800 hover:bg-white hover:border-gray-300 transition-all"
               >
                 {ex}
@@ -320,7 +341,7 @@ export default function ClaudePanel() {
         </div>
       )}
 
-      {/* ── 입력 영역 (하단 고정 — Claude Excel 확장 스타일) ── */}
+      {/* ── 입력 영역 ── */}
       <div className="border-t border-gray-100 bg-white px-3 pt-2.5 pb-3 shrink-0">
         <div className={`flex items-end gap-2 bg-gray-50 border rounded-xl px-3 py-2 transition-all ${
           isProcessing ? 'border-gray-200 opacity-70' : 'border-gray-200 focus-within:border-amber-300 focus-within:ring-2 focus-within:ring-amber-50'
